@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -10,17 +11,42 @@ import (
 	"strings"
 )
 
+const (
+	typeJSON = iota
+	typeXML
+	typeErr
+)
+
 type DBReader interface {
-	readFile(*os.File) error
+	readJSON(*os.File) error
+	readXML(*os.File) error
+	convertXMLToMap()
+	convertJSONToMap()
 }
 
 func readData(dbReader DBReader, fileName string) error {
+	fileType := getDataType(fileName)
+	fmt.Println(fileType)
 	dataFile, err := os.Open(fileName)
 	if err != nil {
 		return err
 	}
 	defer dataFile.Close()
-	return dbReader.readFile(dataFile)
+	if fileType == typeJSON {
+		if err := dbReader.readJSON(dataFile); err != nil {
+			return err
+		}
+		dbReader.convertJSONToMap()
+		return nil
+	} else if fileType == typeXML {
+		if err := dbReader.readXML(dataFile); err != nil {
+			return err
+		}
+		dbReader.convertXMLToMap()
+		return nil
+	}
+	err = errors.New("Wrong file type")
+	return err
 }
 
 type Ingredient struct {
@@ -34,7 +60,9 @@ type Cake struct {
 }
 
 type MapReciepes struct {
-	Cake map[string]Cake
+	Cake     map[string]Cake
+	DataJSON RecipesJSON `xml:"-" json:"-"`
+	DataXML  RecipesXML  `xml:"-" json:"-"`
 }
 
 type RecipesJSON struct {
@@ -68,16 +96,63 @@ type RecipesXML struct {
 	} `xml:"cake"`
 }
 
-func (data *RecipesJSON) readFile(file *os.File) error {
+func (data *MapReciepes) readJSON(file *os.File) error {
+	fmt.Println("read JSON")
 	jsonParser := json.NewDecoder(file)
-	err := jsonParser.Decode(data)
+	err := jsonParser.Decode(&data.DataJSON)
 	return err
 }
 
-func (data *RecipesXML) readFile(file *os.File) error {
+func (data *MapReciepes) readXML(file *os.File) error {
+	fmt.Println("read XML")
 	xmlParser := xml.NewDecoder(file)
-	err := xmlParser.Decode(data)
+	err := xmlParser.Decode(&data.DataXML)
 	return err
+}
+
+func (dataMap *MapReciepes) convertXMLToMap() {
+	dataMap.Cake = make(map[string]Cake)
+	for _, cake := range dataMap.DataXML.Cake {
+		if entry, ok := dataMap.Cake[cake.Name]; ok {
+			entry.IngredientMap = make(map[string]Ingredient)
+			for _, ingredient := range cake.Ingredients.Item {
+				if ingredientCopy, ok := entry.IngredientMap[ingredient.Itemname]; ok {
+					ingredientCopy.IngredientCount = ingredient.Itemcount
+					ingredientCopy.IngredientCount = ingredient.Itemunit
+					entry.IngredientMap[ingredient.Itemname] = ingredientCopy
+				}
+			}
+			entry.Time = cake.Stovetime
+			dataMap.Cake[cake.Name] = entry
+		}
+	}
+}
+
+func (dataMap *MapReciepes) convertJSONToMap() {
+	dataMap.Cake = make(map[string]Cake)
+	for _, cake := range dataMap.DataJSON.Cake {
+		if entry, ok := dataMap.Cake[cake.Name]; ok {
+			entry.IngredientMap = make(map[string]Ingredient)
+			for _, ingredient := range cake.Ingredients {
+				if ingredientCopy, ok := entry.IngredientMap[ingredient.IngredientName]; ok {
+					ingredientCopy.IngredientCount = ingredient.IngredientCount
+					ingredientCopy.IngredientCount = ingredient.IngredientUnit
+					entry.IngredientMap[ingredient.IngredientName] = ingredientCopy
+				}
+			}
+			entry.Time = cake.Time
+			dataMap.Cake[cake.Name] = entry
+		}
+	}
+}
+
+func getDataType(fileName string) int {
+	if strings.HasSuffix(fileName, ".json") {
+		return typeJSON
+	} else if strings.HasSuffix(fileName, ".xml") {
+		return typeXML
+	}
+	return typeErr
 }
 
 func main() {
@@ -87,30 +162,26 @@ func main() {
 		flag.PrintDefaults()
 		return
 	}
-	if strings.HasSuffix(os.Args[2], ".json") {
-		jsonData := &RecipesJSON{}
-		if err := readData(jsonData, os.Args[2]); err != nil {
-			log.Fatal(err)
-		}
-		newXML, err := xml.Marshal(jsonData)
+	data := &MapReciepes{}
+	if err := readData(data, os.Args[2]); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(data)
+	switch getDataType(os.Args[2]) {
+	case typeJSON:
+		newXML, err := xml.Marshal(data.DataJSON)
 		if err != nil {
 			log.Fatal(err)
 		}
 		fmt.Println(string(newXML))
-	} else if strings.HasSuffix(os.Args[2], ".xml") {
-		xmlData := &RecipesXML{}
-		if err := readData(xmlData, os.Args[2]); err != nil {
-			log.Fatal(err)
-		}
-		newJSON, err := json.Marshal(xmlData)
+	case typeXML:
+		newJSON, err := json.Marshal(data.DataXML)
 		if err != nil {
 			log.Fatal(err)
 		}
 		fmt.Println(string(newJSON))
-	} else {
-		fmt.Println("Wrong file type")
-		flag.PrintDefaults()
-		return
+	case typeErr:
+		log.Fatal("Wrong file type")
 	}
 	return
 }
