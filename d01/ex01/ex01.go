@@ -26,7 +26,6 @@ type DBReader interface {
 
 func readData(dbReader DBReader, fileName string) error {
 	fileType := getDataType(fileName)
-	fmt.Println(fileType)
 	dataFile, err := os.Open(fileName)
 	if err != nil {
 		return err
@@ -97,14 +96,12 @@ type RecipesXML struct {
 }
 
 func (data *MapReciepes) readJSON(file *os.File) error {
-	fmt.Println("read JSON")
 	jsonParser := json.NewDecoder(file)
 	err := jsonParser.Decode(&data.DataJSON)
 	return err
 }
 
 func (data *MapReciepes) readXML(file *os.File) error {
-	fmt.Println("read XML")
 	xmlParser := xml.NewDecoder(file)
 	err := xmlParser.Decode(&data.DataXML)
 	return err
@@ -113,12 +110,14 @@ func (data *MapReciepes) readXML(file *os.File) error {
 func (dataMap *MapReciepes) convertXMLToMap() {
 	dataMap.Cake = make(map[string]Cake)
 	for _, cake := range dataMap.DataXML.Cake {
+		dataMap.Cake[cake.Name] = Cake{}
 		if entry, ok := dataMap.Cake[cake.Name]; ok {
 			entry.IngredientMap = make(map[string]Ingredient)
 			for _, ingredient := range cake.Ingredients.Item {
+				entry.IngredientMap[ingredient.Itemname] = Ingredient{}
 				if ingredientCopy, ok := entry.IngredientMap[ingredient.Itemname]; ok {
 					ingredientCopy.IngredientCount = ingredient.Itemcount
-					ingredientCopy.IngredientCount = ingredient.Itemunit
+					ingredientCopy.IngredientUnit = ingredient.Itemunit
 					entry.IngredientMap[ingredient.Itemname] = ingredientCopy
 				}
 			}
@@ -131,12 +130,14 @@ func (dataMap *MapReciepes) convertXMLToMap() {
 func (dataMap *MapReciepes) convertJSONToMap() {
 	dataMap.Cake = make(map[string]Cake)
 	for _, cake := range dataMap.DataJSON.Cake {
+		dataMap.Cake[cake.Name] = Cake{}
 		if entry, ok := dataMap.Cake[cake.Name]; ok {
 			entry.IngredientMap = make(map[string]Ingredient)
 			for _, ingredient := range cake.Ingredients {
+				entry.IngredientMap[ingredient.IngredientName] = Ingredient{}
 				if ingredientCopy, ok := entry.IngredientMap[ingredient.IngredientName]; ok {
 					ingredientCopy.IngredientCount = ingredient.IngredientCount
-					ingredientCopy.IngredientCount = ingredient.IngredientUnit
+					ingredientCopy.IngredientUnit = ingredient.IngredientUnit
 					entry.IngredientMap[ingredient.IngredientName] = ingredientCopy
 				}
 			}
@@ -155,18 +156,11 @@ func getDataType(fileName string) int {
 	return typeErr
 }
 
-func main() {
-	flagF := flag.Bool("f", false, "./readDB -f .json/.xml")
-	flag.Parse()
-	if !*flagF || flag.NArg() != 1 {
-		flag.PrintDefaults()
-		return
-	}
+func formatChange() {
 	data := &MapReciepes{}
 	if err := readData(data, os.Args[2]); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(data)
 	switch getDataType(os.Args[2]) {
 	case typeJSON:
 		newXML, err := xml.Marshal(data.DataJSON)
@@ -183,5 +177,79 @@ func main() {
 	case typeErr:
 		log.Fatal("Wrong file type")
 	}
-	return
+}
+
+func bdCompare(flagOld *string, flagNew *string) {
+	oldData := MapReciepes{}
+	newData := MapReciepes{}
+	if err := readData(&oldData, *flagOld); err != nil {
+		log.Fatal(err)
+	}
+	if err := readData(&newData, *flagNew); err != nil {
+		log.Fatal(err)
+	}
+	for k := range newData.Cake {
+		if _, ok := oldData.Cake[k]; !ok {
+			fmt.Printf("ADDED cake \"%s\"\n", k)
+		}
+	}
+	for cakeKey, cakeVal := range oldData.Cake {
+		newCake, ok := newData.Cake[cakeKey]
+		if !ok {
+			fmt.Printf("REMOVED cake \"%s\"\n", cakeKey)
+		} else {
+			if cakeVal.Time != newCake.Time {
+				fmt.Printf("CHANGED cooking time for cake \"%s\" - \"%s\" instead of \"%s\"\n",
+					cakeKey, cakeVal.Time, newCake.Time)
+			}
+			for ingredientKey := range newCake.IngredientMap {
+				_, ok = cakeVal.IngredientMap[ingredientKey]
+				if !ok {
+					fmt.Printf("ADDED ingredient \"%s\" for cake  \"%s\"\n",
+						ingredientKey, cakeKey)
+				}
+			}
+			for ingredientKey, ingredientVal := range cakeVal.IngredientMap {
+				newIngredient, ok := newCake.IngredientMap[ingredientKey]
+				if !ok {
+					fmt.Printf("REMOVED ingredient \"%s\" for cake  \"%s\"\n",
+						ingredientKey, cakeKey)
+				} else {
+					if ingredientVal.IngredientCount != newIngredient.IngredientCount {
+						fmt.Printf("CHANGED unit count for ingredient \"%s\" for cake  \"%s\" - \"%s\" instead of \"%s\"\n",
+							ingredientKey, cakeKey, newIngredient.IngredientCount, ingredientVal.IngredientCount)
+					}
+					if ingredientVal.IngredientUnit != "" {
+						if newIngredient.IngredientUnit == "" {
+							fmt.Printf("REMOVED unit \"%s\" for ingredient \"%s\" for cake \"%s\"\n",
+								ingredientVal.IngredientUnit, ingredientKey, cakeKey)
+						}
+						if ingredientVal.IngredientUnit != newIngredient.IngredientUnit {
+							fmt.Printf("CHANGED unit for ingredient \"%s\" for cake \"%s\" - \"%s\" instead of \"%s\"\n",
+								ingredientKey, cakeKey, newIngredient.IngredientUnit, ingredientVal.IngredientUnit)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func flagAction() {
+	flagF := flag.Bool("f", false, "./readDB -f .json/.xml")
+	flagOld := flag.String("old", "", "./compareDB --old original_database.xml --new stolen_database.json")
+	flagNew := flag.String("new", "", "./compareDB --old original_database.xml --new stolen_database.json")
+	flag.Parse()
+	if *flagF && flag.NArg() == 1 {
+		formatChange()
+	} else if flag.NArg() == 0 {
+		bdCompare(flagOld, flagNew)
+	} else {
+		flag.PrintDefaults()
+		log.Fatal("Wrong usage")
+	}
+}
+
+func main() {
+	flagAction()
 }
